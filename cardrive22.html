@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8' />
+    <title>Add a 3D model</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <script src='mapbox-gl.js'></script>
+    <link href='mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin:0; padding:0; }
+        #map { position:absolute; top:0; bottom:0; width:100%; }
+
+         .overlay {
+             position: absolute;
+             top: 10px;
+             left: 10px;
+         }
+
+        .overlay button {
+            font:600 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+            background-color: #3386c0;
+            color: #fff;
+            display: inline-block;
+            margin: 0;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        .overlay button:hover {
+            background-color:#4ea0da;
+        }
+    </style>
+</head>
+<body>
+
+<script src='three.min.js'></script>
+<div id='map'></div>
+<div class='overlay'>
+    <button id='replay'>Replay</button>
+</div>
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoicG9sb25nIiwiYSI6ImNpeHlxYWNrcDAwNmEzMnBtNDVkcTA4N2sifQ.tk1D45z7srDUAXg4X9foUw';
+    var map = window.map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/streets-v11',
+        zoom: 16.5,
+        center: [-79.390307, 43.658956],
+        bearing: 20,
+        pitch: 60
+    });
+    var route = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[112.2996597, 22.0133881], [112.2777231, 22.0164887]]
+        }
+    }
+    var point = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+                "type": "Point",
+                "coordinates": route.geometry.coordinates[0]
+            }
+        }]
+    };
+    var bbox = turf.bbox(route)
+    var counter = 0;
+    console.time('route')
+
+    var arrow={
+        "type": "FeatureCollection",
+        "features": [[]]
+    }
+    // parameters to ensure the model is georeferenced correctly on the map
+    var modelOrigin = route.geometry.coordinates[0];
+    var modelAltitude = 0;
+    var modelRotate = [Math.PI / 2, -Math.PI  , 0];
+    var modelScale = 5.41843220338983e-7;
+    // transformation parameters to position, rotate and scale the 3D model onto the map
+    var modelTransform = {
+        translateX: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).x,
+        translateY: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).y,
+        translateZ: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).z,
+        rotateX: modelRotate[0],
+        rotateY: modelRotate[1],
+        rotateZ: modelRotate[2],
+        scale: modelScale
+    };
+
+    var THREE = window.THREE;
+    var radius = 0.5
+    var Gradualsphere = new THREE.SphereGeometry( radius, 100, 100 ,0,Math.PI,0,Math.PI);
+    var GradualMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        vertexColors: THREE.VertexColors,
+        transparent: true,
+        opacity: 0.5 ,
+        side: THREE.DoubleSide
+    });
+
+    var cube=new THREE.Mesh(Gradualsphere,GradualMaterial )
+    cube.scale.multiplyScalar(1.007)
+    // configuration of the custom layer for a 3D model per the CustomLayerInterface
+    var customLayer = {
+        id: '3d-model',
+        type: 'custom',
+        renderingMode: '3d',
+        onAdd: function(map, gl) {
+            this.id = 'mycustomlayer';
+            this.type = 'custom';
+            this.renderingMode = '3d';
+            this.translate = [0.279471, 0.364935, 0.0000025];
+            this.scale = 0.000003;
+            this.camera = new THREE.Camera();
+            this.scene = new THREE.Scene();
+
+
+            this.cube = cube//new THREE.Mesh(geometry, material);
+            this.scene.add(this.cube);
+            const directionalLight = new THREE.DirectionalLight(0xffffff);
+            directionalLight.position.set(0, -70, 100).normalize();
+            this.scene.add(directionalLight);
+
+
+            this.map = map;
+
+            // use the Mapbox GL JS map canvas for three.js
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: map.getCanvas(),
+                context: gl
+            });
+
+            this.renderer.autoClear = false;
+        },
+        render: function(gl, matrix) {
+            if(!gl){
+                var currentTime =Date.now();
+                var time =(currentTime-startTime)/1000
+                var faceIndices=['a','b','c','d']
+                for(var i=0;i<this.cube.geometry.faces.length;i++){
+                    face= this.cube.geometry.faces[i];
+                    numberOfSides = (face instanceof THREE.Face3)?3:4;
+                    for(var j=0;j<numberOfSides;j++){
+                        vertexIndex= face[faceIndices[j]];
+                        point = this.cube.geometry.vertices[vertexIndex]
+                        color =new THREE.Color(0xff0000)
+                        var g= Math.cos((point.z/(radius/Math.PI))+time)
+                        color.setRGB(1,g,point.z/(radius*10/Math.PI))
+                        face.vertexColors[j]=color;
+                    }
+                }
+                this.cube.geometry.elementsNeedUpdate= true;
+            }
+            const m = new THREE.Matrix4().fromArray(matrix);
+            const l = new THREE.Matrix4().makeTranslation(this.translate[0], this.translate[1], this.translate[2])
+                .scale(new THREE.Vector3(this.scale, -this.scale, this.scale));
+           // this.cube.rotation.x += 0.01;
+           // this.cube.rotation.y += 0.01;
+            this.camera.projectionMatrix.elements = matrix;
+            this.camera.projectionMatrix = m.multiply(l);
+            this.renderer.state.reset();
+            this.renderer.render(this.scene, this.camera);
+            if(gl){
+                this.map.triggerRepaint();
+            }
+
+
+        }
+    };
+
+    map.on('style.load', function() {
+        map.addLayer(customLayer, 'waterway-label');
+        animate()
+    });
+
+
+
+    map.on('load', function () {
+        map.addLayer({
+            'id': '3d-buildings',
+            'source': 'composite',
+            'source-layer': 'building',
+            'filter': ['==', 'extrude', 'true'],
+            'type': 'fill-extrusion',
+            'minzoom': 15,
+            'paint': {
+                'fill-extrusion-color': '#ccc',
+                'fill-extrusion-height': ["get", "height"]
+            }
+        })
+
+    })
+
+    var startTime=Date.now();
+    function animate(){
+        customLayer. render(null,customLayer.camera.projectionMatrix.elements)
+        requestAnimationFrame(animate);
+    }
+</script>
+
+</body>
+</html>

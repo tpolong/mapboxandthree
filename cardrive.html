@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8' />
+    <title>Add a 3D model</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <script src='mapbox-gl.js'></script>
+    <link href='mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin:0; padding:0; }
+        #map { position:absolute; top:0; bottom:0; width:100%; }
+
+         .overlay {
+             position: absolute;
+             top: 10px;
+             left: 10px;
+         }
+
+        .overlay button {
+            font:600 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+            background-color: #3386c0;
+            color: #fff;
+            display: inline-block;
+            margin: 0;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+
+        .overlay button:hover {
+            background-color:#4ea0da;
+        }
+    </style>
+</head>
+<body>
+
+<script src='three.min.js'></script>
+<script src="GLTFLoader.js"></script>
+<script src="turf.js"></script>
+<div id='map'></div>
+<div class='overlay'>
+    <button id='replay'>Replay</button>
+</div>
+<script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoicG9sb25nIiwiYSI6ImNpeHlxYWNrcDAwNmEzMnBtNDVkcTA4N2sifQ.tk1D45z7srDUAXg4X9foUw';
+    var map = window.map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/streets-v11',
+
+        zoom: 17.5,
+        center: [109, 19.5],
+        pitch: 60
+    });
+    var route = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[112.2996597, 22.0133881], [112.2777231, 22.0164887]]
+        }
+    }
+    var point = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+                "type": "Point",
+                "coordinates": route.geometry.coordinates[0]
+            }
+        }]
+    };
+    var bbox = turf.bbox(route)
+    //console.log(center,'center')
+    //var bbox = [[-79, 43], [-73, 45]];
+    map.fitBounds(bbox, {
+        padding: { top: 10, bottom: 10, left: 10, right: 10 }
+    });
+    var counter = 0;
+    console.time('route')
+
+    let aLength = route.geometry.coordinates.length;
+
+    var nstep = 1000;
+    var newroute=getRoute(route,nstep,{ units: 'kilometers' })
+    var steps = newroute.geometry.coordinates.length
+
+    var realline = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[0, 0]]
+            }
+        }]
+    }
+    var arrow={
+        "type": "FeatureCollection",
+        "features": [[]]
+    }
+    // parameters to ensure the model is georeferenced correctly on the map
+    var modelOrigin = route.geometry.coordinates[0];
+    var modelAltitude = 0;
+    var modelRotate = [Math.PI / 2, -Math.PI  , 0];
+    var modelScale = 5.41843220338983e-7;
+
+    // transformation parameters to position, rotate and scale the 3D model onto the map
+    var modelTransform = {
+        translateX: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).x,
+        translateY: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).y,
+        translateZ: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).z,
+        rotateX: modelRotate[0],
+        rotateY: modelRotate[1],
+        rotateZ: modelRotate[2],
+        scale: modelScale
+    };
+
+    var THREE = window.THREE;
+    var win;
+    // configuration of the custom layer for a 3D model per the CustomLayerInterface
+    var customLayer = {
+        id: '3d-model',
+        type: 'custom',
+        renderingMode: '3d',
+        onAdd: function(map, gl) {
+            this.camera = new THREE.Camera();
+            this.scene = new THREE.Scene();
+
+            // create two three.js lights to illuminate the model
+            var directionalLight = new THREE.DirectionalLight(0xffffff);
+            directionalLight.position.set(0, -70, 100).normalize();
+            this.scene.add(directionalLight);
+
+            var directionalLight2 = new THREE.DirectionalLight(0xffffff);
+            directionalLight2.position.set(0, 70, 100).normalize();
+            this.scene.add(directionalLight2);
+            var directionalLight3 = new THREE.DirectionalLight(0xffffff);
+            directionalLight3.position.set(0, 0, 100).normalize();
+            this.scene.add(directionalLight3);
+            // use the three.js GLTF loader to add the 3D model to the three.js scene
+            var loader = new THREE.GLTFLoader();
+
+            loader.load('CesiumMilkTruck.gltf', (function (gltf) {
+                this.scene.add(gltf.scene);
+            }).bind(this));
+            this.map = map;
+
+            // use the Mapbox GL JS map canvas for three.js
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: map.getCanvas(),
+                context: gl
+            });
+
+            this.renderer.autoClear = false;
+        },
+        render: function(gl, matrix) {
+
+            var rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), modelTransform.rotateX);
+            var rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 1, 0), modelTransform.rotateY);
+            var rotationZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 0, 1), modelTransform.rotateZ);
+
+            var m = new THREE.Matrix4().fromArray(matrix);
+            var l = new THREE.Matrix4().makeTranslation(modelTransform.translateX, modelTransform.translateY, modelTransform.translateZ)
+                .scale(new THREE.Vector3(modelTransform.scale, -modelTransform.scale, modelTransform.scale))
+                .multiply(rotationX)
+                .multiply(rotationY)
+                .multiply(rotationZ);
+
+            this.camera.projectionMatrix.elements = matrix;
+            this.camera.projectionMatrix = m.multiply(l);
+            this.renderer.state.reset();
+            this.renderer.render(this.scene, this.camera);
+            this.map.triggerRepaint();
+            //win.matrix=matrix;
+
+        }
+    };
+
+    map.on('style.load', function() {
+        map.addLayer(customLayer, 'waterway-label');
+    });
+     function render( matrix,modelTransform) {
+        var rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1, 0, 0), modelTransform.rotateX);
+        var rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 1, 0), modelTransform.rotateY);
+        var rotationZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0, 0, 1), modelTransform.rotateZ);
+
+        var m = new THREE.Matrix4().fromArray(matrix);
+        var l = new THREE.Matrix4().makeTranslation(modelTransform.translateX, modelTransform.translateY, modelTransform.translateZ)
+            .scale(new THREE.Vector3(modelTransform.scale, -modelTransform.scale, modelTransform.scale))
+            .multiply(rotationX)
+            .multiply(rotationY)
+            .multiply(rotationZ);
+         win.matrix=matrix;
+         win.camera.projectionMatrix.elements = matrix;
+         win.camera.projectionMatrix = m.multiply(l);
+         customLayer.renderer.state.reset();
+         customLayer.renderer.render(customLayer.scene, customLayer.camera);
+         map.triggerRepaint();
+
+    }
+
+    function lineMore(from,to,distance,splitLength,units){
+        var step = parseInt(distance/splitLength)
+        var leftLength= distance -step*splitLength
+        var rings=[]
+        var route = turf.lineString([from.geometry.coordinates,to.geometry.coordinates])
+        for(let i=1;i<=step;i++){
+            let nlength=i*splitLength
+            let pnt = turf.along(route, nlength, units);
+            rings.push(pnt.geometry.coordinates)
+        }
+        if(leftLength>0){
+            rings.push(to.geometry.coordinates)
+        }
+        return rings
+    }
+
+    function getRoute(route,nstep,units){
+        var newroute = {
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": []
+            }
+        }
+        var lineDistance = turf.lineDistance(route, );
+        var nDistance = lineDistance / nstep;
+        console.log(nstep, nDistance)
+        for (let i = 0; i < aLength-1;i++) {
+            var from = turf.point(route.geometry.coordinates[i]);
+            var to = turf.point(route.geometry.coordinates[i+1 ]);
+            let lDistance = turf.distance(from, to, units);
+            if(i==0){
+                newroute.geometry.coordinates.push(route.geometry.coordinates[0])
+            }
+            if(lDistance>nDistance){
+                let rings = lineMore(from,to,lDistance,nDistance,units)
+                newroute.geometry.coordinates=newroute.geometry.coordinates.concat(rings)
+            }else{
+                newroute.geometry.coordinates.push(route.geometry.coordinates[i+1 ])
+            }
+        }
+        return newroute
+    }
+    function animate() {
+        if (counter == 0) {
+             point.features[0].geometry.coordinates = newroute.geometry.coordinates[0];
+             realline.features[0].geometry.coordinates = []
+             arrow.features=[[]]
+             realline.features[0].geometry.coordinates.push(point.features[0].geometry.coordinates)
+
+            //map.getSource('point').setData(point);
+
+            var modelOrigin =  newroute.geometry.coordinates[0];
+            var modelAltitude = 0;
+            var modelRotate = [Math.PI / 2, -Math.PI  , 0];
+
+
+            // transformation parameters to position, rotate and scale the 3D model onto the map
+            modelTransform = {
+                translateX: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).x,
+                translateY: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).y,
+                translateZ: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).z,
+                rotateX: modelRotate[0],
+                rotateY: modelRotate[1],
+                rotateZ: modelRotate[2],
+                scale: modelScale
+            };
+            customLayer. render(null,customLayer.camera.projectionMatrix.elements)
+
+        } else if (counter !== 0 && counter < steps) {
+             point.features[0].geometry.coordinates = newroute.geometry.coordinates[counter];
+             realline.features[0].geometry.coordinates.push(point.features[0].geometry.coordinates)
+            let startPnt = newroute.geometry.coordinates[counter - 1]
+            let endPnt   = newroute.geometry.coordinates[counter]
+            // point.features[0].properties.bearing = turf.bearing(
+            //     turf.point(startPnt),
+            //     turf.point(endPnt)
+            // ) -90;
+            // if(1){
+            //     var midPnt = turf.midpoint(startPnt, endPnt);
+            //     midPnt.properties.bearing =point.features[0] .properties.bearing
+            //     arrow.features.push(midPnt)
+            //     map.getSource('arrow').setData(arrow);
+            // }
+
+           // map.getSource('point').setData(point);
+            map.getSource('realroute').setData(realline);
+            let r =(turf.bearing(
+                turf.point(startPnt),
+                turf.point(endPnt)
+            ) -110)/180*Math.PI;
+            console.log(r)
+            var modelOrigin =  newroute.geometry.coordinates[counter];
+            var modelAltitude = 0;
+            var modelRotate = [Math.PI / 2, r, 0];
+
+
+            // transformation parameters to position, rotate and scale the 3D model onto the map
+            modelTransform = {
+                translateX: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).x,
+                translateY: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).y,
+                translateZ: mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude).z,
+                rotateX: modelRotate[0],
+                rotateY: modelRotate[1],
+                rotateZ: modelRotate[2],
+                scale: modelScale
+            };
+            customLayer. render(null,customLayer.camera.projectionMatrix.elements)
+
+        }
+        if (counter < steps) {
+            requestAnimationFrame(animate);
+        }
+        counter = counter + 1;
+    }
+    map.on('load', function () {
+
+            map.addLayer({
+                "id": "realroute",
+                "type": "line",
+                "source": {
+                    "type": "geojson",
+                    "data": realline
+                },
+                "layout": {
+                },
+                "paint": {
+                    "line-color": "green",
+                    "line-width": 8
+                }
+            });})
+    document.getElementById('replay').addEventListener('click', function () {
+        counter = 0;
+        animate();
+    });
+</script>
+
+</body>
+</html>
